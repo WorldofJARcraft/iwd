@@ -24,7 +24,9 @@
 #include <config.h>
 #endif
 
+#include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <assert.h>
 #include <ell/ell.h>
 
@@ -69,6 +71,11 @@ struct test_data {
 	uint16_t status;
 
 	struct handshake_state *handshake;
+};
+
+struct benchmark_data{
+	uint64_t number_of_repetitions;
+	uint64_t test_duration_ms;
 };
 
 struct authenticate_frame {
@@ -562,73 +569,98 @@ static void test_end_to_end(const void *arg)
 	struct auth_proto *ap2;
 	struct test_data *td1 = l_new(struct test_data, 1);
 	struct test_data *td2 = l_new(struct test_data, 1);
-	struct handshake_state *hs1 = test_handshake_state_new(1);
-	struct handshake_state *hs2 = test_handshake_state_new(2);
+	struct handshake_state *hs1;
+	struct handshake_state *hs2;
 	struct authenticate_frame *frame = alloca(
-				sizeof(struct authenticate_frame) + 512);
+	sizeof(struct authenticate_frame) + 512);
 	struct associate_frame *assoc = alloca(sizeof(struct associate_frame));
+	
 	size_t frame_len;
 	uint8_t tmp_commit[512];
 	size_t tmp_commit_len;
 
-	td1->status = 0xffff;
-	td2->status = 0xffff;
+	struct benchmark_data *data = (struct benchmark_data *) arg;
+	const uint64_t number_of_repetitions = data->number_of_repetitions;
 
-	handshake_state_set_supplicant_address(hs1, spa);
-	handshake_state_set_authenticator_address(hs1, aa);
-	handshake_state_set_passphrase(hs1, passphrase);
+	struct timespec start_time, end_time;
 
-	handshake_state_set_supplicant_address(hs2, aa);
-	handshake_state_set_authenticator_address(hs2, spa);
-	handshake_state_set_passphrase(hs2, passphrase);
-	handshake_state_set_authenticator(hs2, true);
+	assert(clock_gettime(CLOCK_MONOTONIC_RAW,&start_time)==0);
 
-	ap1 = sae_sm_new(hs1, end_to_end_tx_func, test_tx_assoc_func, td1);
-	ap2 = sae_sm_new(hs2, end_to_end_tx_func, test_tx_assoc_func, td2);
+	
 
-	/* both peers send out commit */
-	auth_proto_start(ap1);
-	auth_proto_start(ap2);
+	for(uint64_t i = 0; i < number_of_repetitions; i++){
+		td1->status = 0xffff;
+		td2->status = 0xffff;
 
-	/* save sm1 commit, tx_packet will get overwritten with confirm */
-	memcpy(tmp_commit, td1->tx_packet, td1->tx_packet_len);
-	tmp_commit_len = td1->tx_packet_len;
+		
+		hs1 = test_handshake_state_new(1);
+		hs2 = test_handshake_state_new(2);
+		
 
-	/* rx commit for both peers */
-	frame_len = setup_auth_frame(frame, aa, 1, 0, td2->tx_packet + 4,
-					td2->tx_packet_len - 4);
-	assert(auth_proto_rx_authenticate(ap1, (uint8_t *)frame,
-						frame_len) == 0);
+		handshake_state_set_supplicant_address(hs1, spa);
+		handshake_state_set_authenticator_address(hs1, aa);
+		handshake_state_set_passphrase(hs1, passphrase);
 
-	/* both peers should now have sent confirm */
-	frame_len = setup_auth_frame(frame, spa, 1, 0, tmp_commit + 4,
-					tmp_commit_len - 4);
-	assert(auth_proto_rx_authenticate(ap2, (uint8_t *)frame,
-						frame_len) == 0);
+		
+		handshake_state_set_supplicant_address(hs2, aa);
+		handshake_state_set_authenticator_address(hs2, spa);
+		handshake_state_set_passphrase(hs2, passphrase);
+		handshake_state_set_authenticator(hs2, true);
 
-	/* rx confirm for both peers */
-	frame_len = setup_auth_frame(frame, aa, 2, 0, td2->tx_packet + 4,
-					td2->tx_packet_len - 4);
-	assert(auth_proto_rx_authenticate(ap1, (uint8_t *)frame,
-						frame_len) == 0);
+		
+		ap1 = sae_sm_new(hs1, end_to_end_tx_func, test_tx_assoc_func, td1);
+		ap2 = sae_sm_new(hs2, end_to_end_tx_func, test_tx_assoc_func, td2);
 
-	frame_len = setup_auth_frame(frame, spa, 2, 0, td1->tx_packet + 4,
-					td1->tx_packet_len - 4);
-	assert(auth_proto_rx_authenticate(ap2, (uint8_t *)frame,
-						frame_len) == 0);
 
-	assert(td1->tx_assoc_called);
-	assert(td2->tx_assoc_called);
+		/* both peers send out commit */
+		auth_proto_start(ap1);
+		auth_proto_start(ap2);
 
-	frame_len = setup_assoc_frame(assoc, 0);
-	assert(auth_proto_rx_associate(ap1, (uint8_t *)assoc, frame_len) == 0);
-	assert(auth_proto_rx_associate(ap2, (uint8_t *)assoc, frame_len) == 0);
+		/* save sm1 commit, tx_packet will get overwritten with confirm */
+		memcpy(tmp_commit, td1->tx_packet, td1->tx_packet_len);
+		tmp_commit_len = td1->tx_packet_len;
 
-	handshake_state_free(hs1);
-	handshake_state_free(hs2);
+		/* rx commit for both peers */
+		frame_len = setup_auth_frame(frame, aa, 1, 0, td2->tx_packet + 4,
+						td2->tx_packet_len - 4);
+		assert(auth_proto_rx_authenticate(ap1, (uint8_t *)frame,
+							frame_len) == 0);
 
-	auth_proto_free(ap1);
-	auth_proto_free(ap2);
+		/* both peers should now have sent confirm */
+		frame_len = setup_auth_frame(frame, spa, 1, 0, tmp_commit + 4,
+						tmp_commit_len - 4);
+		assert(auth_proto_rx_authenticate(ap2, (uint8_t *)frame,
+							frame_len) == 0);
+
+		/* rx confirm for both peers */
+		frame_len = setup_auth_frame(frame, aa, 2, 0, td2->tx_packet + 4,
+						td2->tx_packet_len - 4);
+		assert(auth_proto_rx_authenticate(ap1, (uint8_t *)frame,
+							frame_len) == 0);
+
+		frame_len = setup_auth_frame(frame, spa, 2, 0, td1->tx_packet + 4,
+						td1->tx_packet_len - 4);
+		assert(auth_proto_rx_authenticate(ap2, (uint8_t *)frame,
+							frame_len) == 0);
+
+		assert(td1->tx_assoc_called);
+		assert(td2->tx_assoc_called);
+
+		frame_len = setup_assoc_frame(assoc, 0);
+		assert(auth_proto_rx_associate(ap1, (uint8_t *)assoc, frame_len) == 0);
+		assert(auth_proto_rx_associate(ap2, (uint8_t *)assoc, frame_len) == 0);
+
+		handshake_state_free(hs1);
+		handshake_state_free(hs2);
+
+		auth_proto_free(ap1);
+		auth_proto_free(ap2);
+	}
+
+	assert(clock_gettime(CLOCK_MONOTONIC_RAW,&end_time) == 0);
+	data->test_duration_ms = (end_time.tv_sec - start_time.tv_sec) * 1000 + (end_time.tv_nsec - start_time.tv_nsec) / 1000000;
+	
+	fprintf(stderr,"Benchmarking results: %lu operations in %lu ms!",number_of_repetitions,data->test_duration_ms);
 
 	l_free(td1);
 	l_free(td2);
@@ -872,9 +904,10 @@ static void test_pt_pwe(const void *data)
 	l_ecc_point_free(pwe);
 	l_ecc_point_free(pt);
 }
-
+#define NUMBER_REPETITIONS_E2E 10000
 int main(int argc, char *argv[])
 {
+	struct benchmark_data data = {NUMBER_REPETITIONS_E2E,0};
 	l_test_init(&argc, &argv);
 
 	if (!l_getrandom_is_supported()) {
@@ -895,7 +928,8 @@ int main(int argc, char *argv[])
 	l_test_add("SAE bad group", test_bad_group, NULL);
 	l_test_add("SAE bad confirm", test_bad_confirm, NULL);
 	l_test_add("SAE confirm after accept", test_confirm_after_accept, NULL);
-	l_test_add("SAE end-to-end", test_end_to_end, NULL);
+
+	l_test_add("SAE end-to-end", test_end_to_end, &data);
 
 	l_test_add("SAE pt-pwe", test_pt_pwe, NULL);
 
