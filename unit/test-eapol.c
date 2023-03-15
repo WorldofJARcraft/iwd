@@ -29,6 +29,10 @@
 #include <assert.h>
 #include <linux/if_ether.h>
 #include <ell/ell.h>
+#include <time.h>
+
+#include <sys/time.h>
+#include <sys/resource.h>
 
 #include "src/util.h"
 #include "src/eapol.h"
@@ -3153,7 +3157,7 @@ static void eapol_sm_test_eap_tls(const void *data)
 		"EAP-Identity=abc@example.com\n"
 		"EAP-TLS-CACert=" CERTDIR "cert-ca.pem\n"
 		"EAP-TLS-ClientCert=" CERTDIR "cert-client.pem\n"
-		"EAP-TLS-ClientKey=" CERTDIR "cert-client-key-pkcs8.pem";
+		"EAP-TLS-ClientKey=" CERTDIR "cert-client-key.pem";
 	struct eapol_8021x_tls_test_state s = {};
 	struct l_settings* config = l_settings_new();
 
@@ -3530,6 +3534,8 @@ struct test_ap_sta_data {
 	int to_ap_msg_cnt;
 	struct eapol_sm *ap_sm;
 	struct eapol_sm *sta_sm;
+
+	int number_repetitions;
 };
 
 static int test_ap_sta_eapol_tx(uint32_t ifindex,
@@ -3563,38 +3569,40 @@ static int test_ap_sta_eapol_tx(uint32_t ifindex,
 
 static void test_ap_sta_run(struct test_ap_sta_data *s)
 {
-	eap_init();
-	eapol_init();
-	__eapol_set_tx_packet_func(test_ap_sta_eapol_tx);
-	__eapol_set_tx_user_data(s);
+	for(int i = 0; i < s->number_repetitions; i++){
+		eap_init();
+		eapol_init();
+		__eapol_set_tx_packet_func(test_ap_sta_eapol_tx);
+		__eapol_set_tx_user_data(s);
 
-	s->ap_success = false;
-	s->sta_success = false;
-	s->to_sta_msg_cnt = 0;
-	s->to_ap_msg_cnt = 0;
-	s->to_sta_data_len = 0;
-
-	s->ap_sm = eapol_sm_new(s->ap_hs);
-	eapol_register(s->ap_sm);
-
-	s->sta_sm = eapol_sm_new(s->sta_hs);
-	eapol_register(s->sta_sm);
-
-	eapol_start(s->sta_sm);
-	eapol_start(s->ap_sm);
-
-	while (s->to_sta_data_len) {
-		int len = s->to_sta_data_len;
+		s->ap_success = false;
+		s->sta_success = false;
+		s->to_sta_msg_cnt = 0;
+		s->to_ap_msg_cnt = 0;
 		s->to_sta_data_len = 0;
-		__eapol_rx_packet(s->sta_hs->ifindex, s->ap_address, ETH_P_PAE,
-					s->to_sta_data, len, false);
+
+		s->ap_sm = eapol_sm_new(s->ap_hs);
+		eapol_register(s->ap_sm);
+
+		s->sta_sm = eapol_sm_new(s->sta_hs);
+		eapol_register(s->sta_sm);
+
+		eapol_start(s->sta_sm);
+		eapol_start(s->ap_sm);
+
+		while (s->to_sta_data_len) {
+			int len = s->to_sta_data_len;
+			s->to_sta_data_len = 0;
+			__eapol_rx_packet(s->sta_hs->ifindex, s->ap_address, ETH_P_PAE,
+						s->to_sta_data, len, false);
+		}
+
+		eapol_sm_free(s->ap_sm);
+		eapol_sm_free(s->sta_sm);
+
+		eapol_exit();
+		eap_exit();
 	}
-
-	eapol_sm_free(s->ap_sm);
-	eapol_sm_free(s->sta_sm);
-
-	eapol_exit();
-	eap_exit();
 }
 
 struct test_ap_sta_hs {
@@ -3666,7 +3674,10 @@ static void eapol_ap_sta_handshake_test(const void *data)
 		.sta_hs = test_ap_sta_hs_new(&s, 2),
 		.ap_address = { 0x02, 0x03, 0x04, 0x05, 0x06, 0x07 },
 		.sta_address = { 0x02, 0x03, 0x04, 0x05, 0x06, 0x08 },
+		.number_repetitions = 10000
 	};
+
+	struct timespec start_time, end_time;
 
 	__handshake_set_get_nonce_func(random_nonce);
 	__handshake_set_install_tk_func(test_ap_sta_install_tk);
@@ -3690,7 +3701,11 @@ static void eapol_ap_sta_handshake_test(const void *data)
 	handshake_state_set_ssid(s.sta_hs, (void *) ssid, strlen(ssid));
 	handshake_state_set_pmk(s.sta_hs, psk, 32);
 
+	clock_gettime(CLOCK_MONOTONIC_RAW, &start_time);
 	test_ap_sta_run(&s);
+	clock_gettime(CLOCK_MONOTONIC_RAW, &end_time);
+
+	fprintf(stderr,"4-Way handshake duration %"PRIu64" ms for %u runs!\n",(end_time.tv_sec - start_time.tv_sec) * 1000 + end_time.tv_nsec /1000000 - start_time.tv_nsec / 1000000, s.number_repetitions);
 
 	handshake_state_free(s.ap_hs);
 	handshake_state_free(s.sta_hs);
@@ -3727,6 +3742,7 @@ static void eapol_ap_sta_handshake_bad_psk_test(const void *data)
 		.sta_hs = test_ap_sta_hs_new(&s, 2),
 		.ap_address = { 0x02, 0x03, 0x04, 0x05, 0x06, 0x07 },
 		.sta_address = { 0x02, 0x03, 0x04, 0x05, 0x06, 0x08 },
+		.number_repetitions = 1,
 	};
 
 	__handshake_set_get_nonce_func(random_nonce);
@@ -3788,6 +3804,7 @@ static void eapol_ap_sta_handshake_ip_alloc_ok_test(const void *data)
 		.sta_hs = test_ap_sta_hs_new(&s, 2),
 		.ap_address = { 0x02, 0x03, 0x04, 0x05, 0x06, 0x07 },
 		.sta_address = { 0x02, 0x03, 0x04, 0x05, 0x06, 0x08 },
+		.number_repetitions = 1,
 	};
 
 	__handshake_set_get_nonce_func(random_nonce);
@@ -3855,6 +3872,7 @@ static void eapol_ap_sta_handshake_ip_alloc_no_req_test(const void *data)
 		.sta_hs = test_ap_sta_hs_new(&s, 2),
 		.ap_address = { 0x02, 0x03, 0x04, 0x05, 0x06, 0x07 },
 		.sta_address = { 0x02, 0x03, 0x04, 0x05, 0x06, 0x08 },
+		.number_repetitions = 1,
 	};
 
 	__handshake_set_get_nonce_func(random_nonce);
@@ -3903,10 +3921,18 @@ static void eapol_ap_sta_handshake_ip_alloc_no_req_test(const void *data)
 #define _XXXX1 _YYYY,
 #define _IS_ENABLED2(one_or_two_args) _IS_ENABLED3(one_or_two_args true, false)
 #define _IS_ENABLED3(ignore_this, val, ...) val
-
+#define NO_FILES 1000000
 int main(int argc, char *argv[])
 {
+	const struct rlimit file_limit = {
+		.rlim_cur = NO_FILES,
+		.rlim_max = NO_FILES
+	};
 	l_test_init(&argc, &argv);
+
+	if(setrlimit(RLIMIT_NOFILE,&file_limit) != 0){
+		perror("Setting limit of open files");
+	}
 
 	l_test_add("/EAPoL Key/Key Frame 1",
 			eapol_key_test, &eapol_key_test_1);
