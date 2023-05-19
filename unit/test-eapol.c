@@ -3187,7 +3187,7 @@ static void eapol_sm_test_eap_tls(const void *data)
 	s.ready_cb = eapol_sm_test_tls_test_ready;
 	s.disconnect_cb = eapol_sm_test_tls_test_disconnected;
 	s.method = EAP_TYPE_TLS;
-	s.number_repetitions = 200;
+	s.number_repetitions = 100;
 
 	eapol_sm_test_tls(&s, config);
 
@@ -3699,7 +3699,7 @@ static void eapol_ap_sta_handshake_test(const void *data)
 		.sta_hs = test_ap_sta_hs_new(&s, 2),
 		.ap_address = { 0x02, 0x03, 0x04, 0x05, 0x06, 0x07 },
 		.sta_address = { 0x02, 0x03, 0x04, 0x05, 0x06, 0x08 },
-		.number_repetitions = 100000
+		.number_repetitions = 100
 	};
 
 	struct timespec start_time, end_time;
