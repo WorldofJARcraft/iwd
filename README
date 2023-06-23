@@ -276,3 +276,40 @@ IRC:
 
 Wiki:
 	https://iwd.wiki.kernel.org/
+
+
+Reproducing Evaluation Results
+===========
+
+## Section VI-B: WIFI Benchmark
+
+Install dependencies for iwd.
+Use the convenience script to compile and run:
+./bootstrap-seka-benchmarks.sh
+
+Search the output for the lines containing benchmark results:
+`
+[...]
+TEST: SAE end-to-end
+Benchmarking results: 10000 operations in 75112 ms!##########################################
+Collected 10000 samples
+Min 6423797 ns max 10453254 ns
+Average 7511141.465700 ns stdev 417464.913887 ns
+##########################################
+[...]
+TEST: EAPoL/8021x EAP-TLS & 4-Way Handshake
+EAP-TLS took 525115 ms for 10000 repetitions!
+##########################################
+Collected 10000 samples
+Min 46312735 ns max 103264352 ns
+Average 52511347.331500 ns stdev 4492125.128629 ns
+##########################################
+[...]
+TEST: EAPoL/Supplicant+Authenticator 4-Way Handshake
+4-Way handshake duration 33 ms for 100 runs!
+##########################################
+Collected 100 samples
+Min 307727 ns max 575679 ns
+Average 326533.470000 ns stdev 36978.877588 ns
+##########################################
+`
