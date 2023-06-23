@@ -3,6 +3,14 @@ if [ -f config.status ]; then
 	make maintainer-clean
 fi
 
+if [ -d ../ell ]; then
+    echo "ell found!";
+else
+    echo "Cloning ell";
+    git clone https://kernel.googlesource.com/pub/scm/libs/ell/ell.git ../ell/;
+    (cd ../ell; git checkout 89d4888f1321c03810534a3e1cf464fc5fe368f2);
+fi
+
 ./bootstrap && \
     ./configure CFLAGS="-march=native -mtune=native -O3" \
         --enable-maintainer-mode \
