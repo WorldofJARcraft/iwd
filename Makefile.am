@@ -498,7 +498,7 @@ unit_test_eapol_SOURCES = unit/test-eapol.c \
 				src/erp.h src/erp.c \
 				src/band.h src/band.c \
 				src/mschaputil.h src/mschaputil.c
-unit_test_eapol_LDADD = $(ell_ldadd)
+unit_test_eapol_LDADD = $(ell_ldadd) -lm
 unit_test_eapol_DEPENDENCIES = $(ell_dependencies) \
 				unit/cert-server.pem \
 				unit/cert-server-key-pkcs8.pem \
@@ -556,7 +556,7 @@ unit_test_sae_SOURCES = unit/test-sae.c \
 				src/band.h src/band.c \
 				src/util.h src/util.c \
 				src/mpdu.h src/mpdu.c
-unit_test_sae_LDADD = $(ell_ldadd)
+unit_test_sae_LDADD = $(ell_ldadd) -lm
 unit_test_sae_LDFLAGS = -Wl,-wrap,l_ecc_supported_ike_groups
 
 unit_test_p2p_SOURCES = unit/test-p2p.c src/wscutil.h src/wscutil.c \
