@@ -696,6 +696,8 @@ static void test_end_to_end(const void *arg)
 
 	l_free(td1);
 	l_free(td2);
+
+    DESTROY_STAT(statistics);
 }
 
 static void test_pt_pwe(const void *data)

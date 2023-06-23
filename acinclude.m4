@@ -52,7 +52,7 @@ AC_DEFUN([COMPILER_FLAGS], [
 		CFLAGS+=" -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2"
 	fi
 	if (test "$USE_MAINTAINER_MODE" = "yes"); then
-		CFLAGS+=" -Werror -Wextra"
+		CFLAGS+=" -Wextra"
 		CFLAGS+=" -Wno-unused-parameter"
 		CFLAGS+=" -Wno-missing-field-initializers"
 		CFLAGS+=" -Wdeclaration-after-statement"

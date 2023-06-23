@@ -2430,10 +2430,11 @@ static void eapol_eap_msg_cb(const uint8_t *eap_data, size_t len,
 static void eapol_eap_complete_cb(enum eap_result result, void *user_data)
 {
 	struct eapol_sm *sm = user_data;
-
-	l_info("EAP completed with %s", result == EAP_RESULT_SUCCESS ?
+	if(result != EAP_RESULT_SUCCESS){
+		l_info("EAP completed with %s", result == EAP_RESULT_SUCCESS ?
 			"eapSuccess" : (result == EAP_RESULT_FAIL ?
 				"eapFail" : "eapTimeout"));
+	}
 
 	if (result != EAP_RESULT_SUCCESS) {
 		eap_free(sm->eap);

@@ -35,8 +35,14 @@ static inline void add_sample(struct statistics_values *stats, uint64_t sample){
     stats->samples_ns[stats->number_samples++] = sample;
 }
 
+static int compare_uint64t(const void *arg1, const void *arg2){
+    const uint64_t val1 = *(uint64_t *) arg1, val2 = *(uint64_t *) arg2;
+
+    return val1 - val2;
+}
+
 static inline void evaluate_statistics(const struct statistics_values *stats, const char *benchmark_name){
-    uint64_t sum = 0;
+    uint64_t sum = 0, min, max;
     double sum_of_squares = 0;
     double average, variance, stdev;
 
@@ -55,7 +61,13 @@ static inline void evaluate_statistics(const struct statistics_values *stats, co
     variance = sum_of_squares / (double) stats->number_samples;
 
     stdev = sqrt(variance);
+
+    qsort(stats->samples_ns,stats->number_samples,sizeof(uint64_t),compare_uint64t);
+    min = stats->samples_ns[0];
+    max = stats->samples_ns[stats->number_samples - 1];
     fprintf(stderr, "##########################################\n");
+    fprintf(stderr, "Collected %"PRIu64" samples\n", stats->number_samples);
+    fprintf(stderr, "Min %"PRIu64" ns max %"PRIu64" ns\n", min,max);
     fprintf(stderr, "Average %f ns stdev %f ns\n", average, stdev);
     fprintf(stderr, "##########################################\n");
 }
@@ -66,7 +78,7 @@ static inline void destroy_stat(struct statistics_values *stat){
     }
     memset(stat,0,sizeof(*stat));
 }
-
+#define NS_PER_S 1000000000
 #define INIT_STAT(stat_name) struct statistics_values stat_name; \
                              init_statistics(&stat_name)
 #define BENCHMARK_OP(stat_name, op)                                                             \
@@ -77,8 +89,7 @@ static inline void destroy_stat(struct statistics_values *stat){
                                     op;                                                         \
                                     assert(clock_gettime(CLOCK_MONOTONIC_RAW,&end_time)==0);    \
                                     duration_ns = (end_time.tv_sec - start_time.tv_sec)         \
-                                        * 1000 + (end_time.tv_nsec - start_time.tv_nsec)        \
-                                        / 1000000;                                              \
+                                        * NS_PER_S + (end_time.tv_nsec - start_time.tv_nsec); \
                                     add_sample(&stat_name,duration_ns);                         \
                             }
 #define DESTROY_STAT(stat_name) destroy_stat(&stat_name);

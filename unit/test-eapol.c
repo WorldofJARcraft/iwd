@@ -42,6 +42,8 @@
 #include "src/eap-private.h"
 #include "src/handshake.h"
 
+#include "statistics.h"
+
 /* Our nonce to use + its size */
 static const uint8_t *snonce;
 
@@ -2916,121 +2918,140 @@ static void eapol_sm_test_tls(struct eapol_8021x_tls_test_state *s,
 	struct l_key *server_key;
 	struct l_queue *ca_cert;
 
-	struct timespec start_time, end_time;
+	aa = ap_address;
+	spa = sta_address;
 
-	clock_gettime(CLOCK_MONOTONIC_RAW,&start_time);
+	eap_init();
+	eapol_init();
+	__handshake_set_get_nonce_func(test_nonce);
 
-	for(int i = 0; i < s->number_repetitions; i++){
+	hs = test_handshake_state_new(1);
+	ths = l_container_of(hs, struct test_handshake_state, super);
+	sm = eapol_sm_new(hs);
+	eapol_register(sm);
 
-		aa = ap_address;
-		spa = sta_address;
+	handshake_state_set_authenticator_address(hs, ap_address);
+	handshake_state_set_supplicant_address(hs, sta_address);
+	handshake_state_set_event_func(hs, test_handshake_event, NULL);
+	__eapol_set_tx_user_data(s);
 
-		eap_init();
-		eapol_init();
-		__handshake_set_get_nonce_func(test_nonce);
+	r = handshake_state_set_supplicant_ie(hs,
+				eapol_key_data_14 + EAPOL_FRAME_LEN(16));
+	assert(r);
 
-		hs = test_handshake_state_new(1);
-		ths = l_container_of(hs, struct test_handshake_state, super);
-		sm = eapol_sm_new(hs);
-		eapol_register(sm);
+	handshake_state_set_authenticator_ie(hs, ap_wpa_ie);
 
-		handshake_state_set_authenticator_address(hs, ap_address);
-		handshake_state_set_supplicant_address(hs, sta_address);
-		handshake_state_set_event_func(hs, test_handshake_event, NULL);
-		__eapol_set_tx_user_data(s);
+	handshake_state_set_8021x_config(hs, config);
+	eapol_start(sm);
 
-		r = handshake_state_set_supplicant_ie(hs,
-					eapol_key_data_14 + EAPOL_FRAME_LEN(16));
-		assert(r);
+	__eapol_set_tx_packet_func(verify_8021x_identity_resp);
+	s->pending_req = 1;
+	__eapol_rx_packet(1, ap_address, ETH_P_PAE, eap_identity_req,
+					sizeof(eap_identity_req), false);
+	assert(!s->pending_req);
 
-		handshake_state_set_authenticator_ie(hs, ap_wpa_ie);
+	s->tls = l_tls_new(true, s->app_data_cb, eapol_sm_test_tls_test_write,
+				s->ready_cb, s->disconnect_cb, s);
+	assert(s->tls);
 
-		handshake_state_set_8021x_config(hs, config);
-		eapol_start(sm);
+	if (getenv("IWD_TLS_DEBUG"))
+		l_tls_set_debug(s->tls, tls_debug, NULL, NULL);
 
-		__eapol_set_tx_packet_func(verify_8021x_identity_resp);
+	s->last_id = 1;
+	s->success = false;
+	s->tx_buf_len = 0;
+	s->tx_buf_offset = 0;
+
+	server_cert = l_pem_load_certificate_chain(CERTDIR "cert-server.pem");
+	assert(server_cert);
+	
+
+	server_key = l_pem_load_private_key(CERTDIR "cert-server-key-pkcs8.pem",
+						NULL, NULL);
+	assert(server_key);
+
+
+	ca_cert = l_pem_load_certificate_list(CERTDIR "cert-ca.pem");
+	assert(ca_cert);
+	
+	__eapol_set_tx_packet_func(verify_8021x_tls_resp);
+
+	
+
+	assert(l_tls_set_auth_data(s->tls, server_cert, server_key));
+	assert(l_tls_set_cacert(s->tls, ca_cert));
+	assert(l_tls_start(s->tls));
+
+	ths->handshake_failed = false;
+
+	start = 1;
+	while ((!s->success || s->tx_buf_len) &&
+			!ths->handshake_failed && !s->disconnected) {
+		tx_len = 0;
+		data_len = 1024 < s->tx_buf_len ? 1024 : s->tx_buf_len;
+		header_len = 6;
+		if (data_len < s->tx_buf_len && !s->tx_buf_offset)
+			header_len += 4;
+		tx_buf[tx_len++] = EAPOL_PROTOCOL_VERSION_2004;
+		tx_buf[tx_len++] = 0x00; /* EAPoL-EAP */
+		tx_buf[tx_len++] = (data_len + header_len) >> 8;
+		tx_buf[tx_len++] = (data_len + header_len) >> 0;
+
+		tx_buf[tx_len++] = EAP_CODE_REQUEST;
+		tx_buf[tx_len++] = ++s->last_id;
+		tx_buf[tx_len++] = (data_len + header_len) >> 8;
+		tx_buf[tx_len++] = (data_len + header_len) >> 0;
+		tx_buf[tx_len++] = s->method;
+		tx_buf[tx_len++] = 0x00; /* Flags */
+
+		if (start) {
+			tx_buf[tx_len - 1] |= 0x20; /* S flag */
+			start = 0;
+		}
+
+		if (data_len < s->tx_buf_len)
+			tx_buf[tx_len - 1] |= 0x40; /* M flag */
+
+		if (data_len < s->tx_buf_len && !s->tx_buf_offset) {
+			tx_buf[tx_len - 1] |= 0x80; /* L flag */
+
+			tx_buf[tx_len++] = s->tx_buf_len >> 24;
+			tx_buf[tx_len++] = s->tx_buf_len >> 16;
+			tx_buf[tx_len++] = s->tx_buf_len >>  8;
+			tx_buf[tx_len++] = s->tx_buf_len >>  0;
+		}
+
+		memcpy(tx_buf + tx_len, s->tx_buf + s->tx_buf_offset, data_len);
+		tx_len += data_len;
+		s->tx_buf_offset += data_len;
+		s->tx_buf_len -= data_len;
+
+		if (!s->tx_buf_len)
+			s->tx_buf_offset = 0;
+
 		s->pending_req = 1;
-		__eapol_rx_packet(1, ap_address, ETH_P_PAE, eap_identity_req,
-						sizeof(eap_identity_req), false);
+
+		__eapol_rx_packet(1, ap_address, ETH_P_PAE,
+					tx_buf, tx_len, false);
+
+		if (ths->handshake_failed || s->disconnected)
+			break;
+
 		assert(!s->pending_req);
 
-		s->tls = l_tls_new(true, s->app_data_cb, eapol_sm_test_tls_test_write,
-					s->ready_cb, s->disconnect_cb, s);
-		assert(s->tls);
-
-		if (getenv("IWD_TLS_DEBUG"))
-			l_tls_set_debug(s->tls, tls_debug, NULL, NULL);
-
-		s->last_id = 1;
-		s->success = false;
-		s->tx_buf_len = 0;
-		s->tx_buf_offset = 0;
-
-		server_cert = l_pem_load_certificate_chain(CERTDIR "cert-server.pem");
-		assert(server_cert);
-
-		server_key = l_pem_load_private_key(CERTDIR "cert-server-key-pkcs8.pem",
-							NULL, NULL);
-		assert(server_key);
-
-		ca_cert = l_pem_load_certificate_list(CERTDIR "cert-ca.pem");
-		assert(ca_cert);
-
-
-		__eapol_set_tx_packet_func(verify_8021x_tls_resp);
-
-		
-
-		assert(l_tls_set_auth_data(s->tls, server_cert, server_key));
-		assert(l_tls_set_cacert(s->tls, ca_cert));
-		assert(l_tls_start(s->tls));
-
-		ths->handshake_failed = false;
-
-		start = 1;
-		while ((!s->success || s->tx_buf_len) &&
-				!ths->handshake_failed && !s->disconnected) {
+		while (s->tx_ack) {
 			tx_len = 0;
-			data_len = 1024 < s->tx_buf_len ? 1024 : s->tx_buf_len;
-			header_len = 6;
-			if (data_len < s->tx_buf_len && !s->tx_buf_offset)
-				header_len += 4;
 			tx_buf[tx_len++] = EAPOL_PROTOCOL_VERSION_2004;
 			tx_buf[tx_len++] = 0x00; /* EAPoL-EAP */
-			tx_buf[tx_len++] = (data_len + header_len) >> 8;
-			tx_buf[tx_len++] = (data_len + header_len) >> 0;
+			tx_buf[tx_len++] = 0x00;
+			tx_buf[tx_len++] = 0x06; /* Length */
 
 			tx_buf[tx_len++] = EAP_CODE_REQUEST;
 			tx_buf[tx_len++] = ++s->last_id;
-			tx_buf[tx_len++] = (data_len + header_len) >> 8;
-			tx_buf[tx_len++] = (data_len + header_len) >> 0;
+			tx_buf[tx_len++] = 0x00;
+			tx_buf[tx_len++] = 0x06; /* Length */
 			tx_buf[tx_len++] = s->method;
 			tx_buf[tx_len++] = 0x00; /* Flags */
-
-			if (start) {
-				tx_buf[tx_len - 1] |= 0x20; /* S flag */
-				start = 0;
-			}
-
-			if (data_len < s->tx_buf_len)
-				tx_buf[tx_len - 1] |= 0x40; /* M flag */
-
-			if (data_len < s->tx_buf_len && !s->tx_buf_offset) {
-				tx_buf[tx_len - 1] |= 0x80; /* L flag */
-
-				tx_buf[tx_len++] = s->tx_buf_len >> 24;
-				tx_buf[tx_len++] = s->tx_buf_len >> 16;
-				tx_buf[tx_len++] = s->tx_buf_len >>  8;
-				tx_buf[tx_len++] = s->tx_buf_len >>  0;
-			}
-
-			memcpy(tx_buf + tx_len, s->tx_buf + s->tx_buf_offset, data_len);
-			tx_len += data_len;
-			s->tx_buf_offset += data_len;
-			s->tx_buf_len -= data_len;
-
-			if (!s->tx_buf_len)
-				s->tx_buf_offset = 0;
 
 			s->pending_req = 1;
 
@@ -3041,50 +3062,20 @@ static void eapol_sm_test_tls(struct eapol_8021x_tls_test_state *s,
 				break;
 
 			assert(!s->pending_req);
-
-			while (s->tx_ack) {
-				tx_len = 0;
-				tx_buf[tx_len++] = EAPOL_PROTOCOL_VERSION_2004;
-				tx_buf[tx_len++] = 0x00; /* EAPoL-EAP */
-				tx_buf[tx_len++] = 0x00;
-				tx_buf[tx_len++] = 0x06; /* Length */
-
-				tx_buf[tx_len++] = EAP_CODE_REQUEST;
-				tx_buf[tx_len++] = ++s->last_id;
-				tx_buf[tx_len++] = 0x00;
-				tx_buf[tx_len++] = 0x06; /* Length */
-				tx_buf[tx_len++] = s->method;
-				tx_buf[tx_len++] = 0x00; /* Flags */
-
-				s->pending_req = 1;
-
-				__eapol_rx_packet(1, ap_address, ETH_P_PAE,
-							tx_buf, tx_len, false);
-
-				if (ths->handshake_failed || s->disconnected)
-					break;
-
-				assert(!s->pending_req);
-			}
 		}
-
-		l_tls_free(s->tls);
-
-		if (ths->handshake_failed || s->disconnected) {
-			assert(s->expect_handshake_fail);
-
-			if (ths->handshake_failed)
-				sm = NULL;
-
-			goto done;
-		}
-
 	}
 
-	clock_gettime(CLOCK_MONOTONIC_RAW,&end_time);
-	if(s->number_repetitions>1){
-		fprintf(stderr,"EAP-TLS took %"PRIu64" ms for %u repetitions!\n",(end_time.tv_sec - start_time.tv_sec) * 1000 + end_time.tv_nsec / 1000000 - start_time.tv_nsec / 1000000,s->number_repetitions);
+	l_tls_free(s->tls);
+
+	if (ths->handshake_failed || s->disconnected) {
+		assert(s->expect_handshake_fail);
+
+		if (ths->handshake_failed)
+			sm = NULL;
+
+		goto done;
 	}
+
 
 	assert(!s->expect_handshake_fail);
 
@@ -3180,6 +3171,9 @@ static void eapol_sm_test_eap_tls(const void *data)
 		"EAP-TLS-ClientKey=" CERTDIR "cert-client-key.pem";
 	struct eapol_8021x_tls_test_state s = {};
 	struct l_settings* config = l_settings_new();
+	struct timespec start_time, end_time;
+
+	INIT_STAT(statistics);
 
 	l_settings_load_from_data(config, config_8021x, strlen(config_8021x));
 
@@ -3187,11 +3181,25 @@ static void eapol_sm_test_eap_tls(const void *data)
 	s.ready_cb = eapol_sm_test_tls_test_ready;
 	s.disconnect_cb = eapol_sm_test_tls_test_disconnected;
 	s.method = EAP_TYPE_TLS;
-	s.number_repetitions = 100;
+	s.number_repetitions = 10000;
 
-	eapol_sm_test_tls(&s, config);
+
+
+	clock_gettime(CLOCK_MONOTONIC_RAW,&start_time);
+
+	for(int i = 0; i < s.number_repetitions; i++){
+		BENCHMARK_OP(statistics, eapol_sm_test_tls(&s, config));
+	}
+
+	clock_gettime(CLOCK_MONOTONIC_RAW,&end_time);
+	if(s.number_repetitions>1){
+		fprintf(stderr,"EAP-TLS took %"PRIu64" ms for %u repetitions!\n",(end_time.tv_sec - start_time.tv_sec) * 1000 + end_time.tv_nsec / 1000000 - start_time.tv_nsec / 1000000,s.number_repetitions);
+	}
 
 	l_settings_free(config);
+
+	evaluate_statistics(&statistics,"WPA-Enterprise (EAP-TLS)");
+	DESTROY_STAT(statistics);
 }
 
 static void eapol_sm_test_eap_tls_embedded(const void *data)
@@ -3594,40 +3602,39 @@ static int test_ap_sta_eapol_tx(uint32_t ifindex,
 
 static void test_ap_sta_run(struct test_ap_sta_data *s)
 {
-	for(int i = 0; i < s->number_repetitions; i++){
-		eap_init();
-		eapol_init();
-		__eapol_set_tx_packet_func(test_ap_sta_eapol_tx);
-		__eapol_set_tx_user_data(s);
+	eap_init();
+	eapol_init();
+	__eapol_set_tx_packet_func(test_ap_sta_eapol_tx);
+	__eapol_set_tx_user_data(s);
 
-		s->ap_success = false;
-		s->sta_success = false;
-		s->to_sta_msg_cnt = 0;
-		s->to_ap_msg_cnt = 0;
+	s->ap_success = false;
+	s->sta_success = false;
+	s->to_sta_msg_cnt = 0;
+	s->to_ap_msg_cnt = 0;
+	s->to_sta_data_len = 0;
+
+	s->ap_sm = eapol_sm_new(s->ap_hs);
+	eapol_register(s->ap_sm);
+
+	s->sta_sm = eapol_sm_new(s->sta_hs);
+	eapol_register(s->sta_sm);
+
+	eapol_start(s->sta_sm);
+	eapol_start(s->ap_sm);
+
+	while (s->to_sta_data_len) {
+		int len = s->to_sta_data_len;
 		s->to_sta_data_len = 0;
-
-		s->ap_sm = eapol_sm_new(s->ap_hs);
-		eapol_register(s->ap_sm);
-
-		s->sta_sm = eapol_sm_new(s->sta_hs);
-		eapol_register(s->sta_sm);
-
-		eapol_start(s->sta_sm);
-		eapol_start(s->ap_sm);
-
-		while (s->to_sta_data_len) {
-			int len = s->to_sta_data_len;
-			s->to_sta_data_len = 0;
-			__eapol_rx_packet(s->sta_hs->ifindex, s->ap_address, ETH_P_PAE,
-						s->to_sta_data, len, false);
-		}
-
-		eapol_sm_free(s->ap_sm);
-		eapol_sm_free(s->sta_sm);
-
-		eapol_exit();
-		eap_exit();
+		__eapol_rx_packet(s->sta_hs->ifindex, s->ap_address, ETH_P_PAE,
+					s->to_sta_data, len, false);
 	}
+
+	eapol_sm_free(s->ap_sm);
+	eapol_sm_free(s->sta_sm);
+
+	eapol_exit();
+	eap_exit();
+	
 }
 
 struct test_ap_sta_hs {
@@ -3704,6 +3711,9 @@ static void eapol_ap_sta_handshake_test(const void *data)
 
 	struct timespec start_time, end_time;
 
+
+	INIT_STAT(statistics);
+
 	__handshake_set_get_nonce_func(random_nonce);
 	__handshake_set_install_tk_func(test_ap_sta_install_tk);
 	__handshake_set_install_gtk_func(NULL);
@@ -3727,10 +3737,16 @@ static void eapol_ap_sta_handshake_test(const void *data)
 	handshake_state_set_pmk(s.sta_hs, psk, 32);
 
 	clock_gettime(CLOCK_MONOTONIC_RAW, &start_time);
-	test_ap_sta_run(&s);
+
+	for(int i = 0; i < s.number_repetitions; i++){
+		BENCHMARK_OP(statistics,test_ap_sta_run(&s));
+	}
 	clock_gettime(CLOCK_MONOTONIC_RAW, &end_time);
 
 	fprintf(stderr,"4-Way handshake duration %"PRIu64" ms for %u runs!\n",(end_time.tv_sec - start_time.tv_sec) * 1000 + end_time.tv_nsec /1000000 - start_time.tv_nsec / 1000000, s.number_repetitions);
+
+	evaluate_statistics(&statistics,"WPA2-PSK (4-Way Handshake)");
+
 
 	handshake_state_free(s.ap_hs);
 	handshake_state_free(s.sta_hs);
@@ -3739,6 +3755,8 @@ static void eapol_ap_sta_handshake_test(const void *data)
 	assert(s.ap_success && s.sta_success);
 	assert(s.to_ap_msg_cnt == 2 && s.to_sta_msg_cnt == 2);
 	assert(!memcmp(s.ap_tk, s.sta_tk, 16));
+
+    DESTROY_STAT(statistics);
 }
 
 static void eapol_ap_sta_handshake_bad_psk_test(const void *data)
