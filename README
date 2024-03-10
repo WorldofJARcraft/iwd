@@ -281,7 +281,7 @@ Wiki:
 Reproducing Evaluation Results
 ===========
 
-## Section VI-B: WIFI Benchmark
+## Section 4.2: WIFI Benchmark
 
 Install dependencies for iwd.
 Use the convenience script to compile and run:
@@ -291,25 +291,17 @@ Search the output for the lines containing benchmark results:
 `
 [...]
 TEST: SAE end-to-end
-Benchmarking results: 10000 operations in 75112 ms!##########################################
+Benchmarking results: 10000 operations in 68716 ms!##########################################
 Collected 10000 samples
-Min 6423797 ns max 10453254 ns
-Average 7511141.465700 ns stdev 417464.913887 ns
+Min 6582697 ns max 17097839 ns
+Average 6871529.899700 ns stdev 253111.830813 ns
 ##########################################
-[...]
-TEST: EAPoL/8021x EAP-TLS & 4-Way Handshake
-EAP-TLS took 525115 ms for 10000 repetitions!
-##########################################
-Collected 10000 samples
-Min 46312735 ns max 103264352 ns
-Average 52511347.331500 ns stdev 4492125.128629 ns
-##########################################
-[...]
+Running 4-Way Handshake and EAP-TLS Benchmarks
 TEST: EAPoL/Supplicant+Authenticator 4-Way Handshake
-4-Way handshake duration 33 ms for 100 runs!
+4-Way handshake duration 29 ms for 100 runs!
 ##########################################
 Collected 100 samples
-Min 307727 ns max 575679 ns
-Average 326533.470000 ns stdev 36978.877588 ns
+Min 274996 ns max 463850 ns
+Average 290298.820000 ns stdev 33160.656254 ns
 ##########################################
 `
